@@ -72,20 +72,34 @@ int child_func(void *arg) {
 
     close(pipefd[1]);
 
-    // disable buffering
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
 
-    // isolation setup
+    // ================= ISOLATION =================
     sethostname("mycontainer", 11);
+
+    // mount namespace
     mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
 
+    // ROOTFS ISOLATION
+    if (chroot("rootfs-alpha") != 0) {
+        perror("chroot failed");
+        return 1;
+    }
+
+    if (chdir("/") != 0) {
+        perror("chdir failed");
+        return 1;
+    }
+
+    // mount proc inside container
     mkdir("/proc", 0555);
     mount("proc", "/proc", "proc", 0, NULL);
 
-    // run non-interactive commands (stable logging)
+    // ================= WORKLOAD =================
     printf("Inside container!\n");
-    execlp("/bin/sh", "/bin/sh", "-c", "echo hello; ls; sleep 1", NULL);
+
+    execl("/bin/sh", "/bin/sh", "-c", "echo hello; ls /; sleep 5", NULL);
 
     perror("exec failed");
     return 1;
