@@ -19,22 +19,31 @@ typedef struct {
     int id;
     pid_t pid;
     char state[16];
+    char log_file[64];
+    int exit_code;
+    int stop_requested;
 } container_t;
 
 container_t containers[MAX_CONTAINERS];
 int container_count = 0;
 
+typedef struct {
+    int fd;
+    int container_id;
+} log_arg_t;
 // ================= LOGGER THREAD =================
 void* log_reader(void *arg) {
-    int fd = *(int*)arg;
+    log_arg_t *logarg = (log_arg_t *)arg;
+    int fd = logarg->fd;
+    int cid = logarg->container_id;
 
-    static int log_id = 0;
     char filename[64];
-    sprintf(filename, "logs/container_%d.log", log_id++);
+    sprintf(filename, "logs/container_%d.log", cid);
 
     int log_fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (log_fd < 0) {
         perror("log open failed");
+        free(logarg);
         return NULL;
     }
 
@@ -47,6 +56,7 @@ void* log_reader(void *arg) {
 
     close(log_fd);
     close(fd);
+    free(logarg);
     return NULL;
 }
 
@@ -89,7 +99,18 @@ void sigchld_handler(int sig) {
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         for (int i = 0; i < container_count; i++) {
             if (containers[i].pid == pid) {
+                if (WIFEXITED(status)) {
+                  strcpy(containers[i].state, "EXITED");
+                  containers[i].exit_code = WEXITSTATUS(status);
+                } 
+                else if (WIFSIGNALED(status)) {
+                  strcpy(containers[i].state, "KILLED");
+                  containers[i].exit_code = 128 + WTERMSIG(status);
+                } 
+                else {
                 strcpy(containers[i].state, "STOPPED");
+                containers[i].exit_code = -1;
+                }
                 printf("\nContainer %d exited\n", containers[i].id);
             }
         }
@@ -122,12 +143,17 @@ void run_container() {
     close(pipefd[1]);
 
     pthread_t tid;
-    pthread_create(&tid, NULL, log_reader, &pipefd[0]);
+    log_arg_t *logarg = malloc(sizeof(log_arg_t));
+    logarg->fd = pipefd[0];
+    logarg->container_id = container_count;
+    pthread_create(&tid, NULL, log_reader, logarg);
 
     containers[container_count].id = container_count;
     containers[container_count].pid = pid;
     strcpy(containers[container_count].state, "RUNNING");
-
+    sprintf(containers[container_count].log_file, "logs/container_%d.log", container_count);
+    containers[container_count].exit_code = -1;
+    containers[container_count].stop_requested = 0;
     printf("Container %d started (PID %d)\n", container_count, pid);
 
     container_count++;
@@ -135,15 +161,16 @@ void run_container() {
 
 // ================= LIST =================
 void list_containers() {
-    printf("\nID\tPID\tSTATE\n");
+    printf("\nID\tPID\tSTATE\tEXIT\tLOG FILE\n");
     for (int i = 0; i < container_count; i++) {
-        printf("%d\t%d\t%s\n",
+        printf("%d\t%d\t%s\t%d\t%s\n",
                containers[i].id,
                containers[i].pid,
-               containers[i].state);
+               containers[i].state,
+               containers[i].exit_code,
+               containers[i].log_file);
     }
 }
-
 // ================= MAIN =================
 int main() {
     signal(SIGCHLD, sigchld_handler);
