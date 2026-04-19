@@ -185,31 +185,47 @@ void list_containers() {
                containers[i].log_file);
     }
 }
+void print_usage(const char *prog) {
+    fprintf(stderr,
+        "Usage:\n"
+        "  %s run\n"
+        "  %s ps\n",
+        prog, prog);
+}
 // ================= MAIN =================
-int main() {
+int main(int argc, char *argv[]) {
     signal(SIGCHLD, sigchld_handler);
 
     mkdir("logs", 0755);
 
-    char cmd[50];
-
-    while (1) {
-        printf("\nEnter command (run / ps / exit): ");
-        scanf("%s", cmd);
-
-        if (strcmp(cmd, "run") == 0) {
-            run_container();
-        }
-        else if (strcmp(cmd, "ps") == 0) {
-            list_containers();
-        }
-        else if (strcmp(cmd, "exit") == 0) {
-            break;
-        }
-        else {
-            printf("Unknown command\n");
-        }
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return 1;
     }
 
-    return 0;
+    if (strcmp(argv[1], "run") == 0) {
+        if (argc != 2) {
+            print_usage(argv[0]);
+            return 1;
+        }
+
+        run_container();
+
+        // temporary wait so child can finish and logs can be written
+        sleep(6);
+        return 0;
+    }
+    else if (strcmp(argv[1], "ps") == 0) {
+        if (argc != 2) {
+            print_usage(argv[0]);
+            return 1;
+        }
+
+        list_containers();
+        return 0;
+    }
+    else {
+        print_usage(argv[0]);
+        return 1;
+    }
 }
