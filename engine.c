@@ -18,6 +18,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include "monitor_ioctl.h"
 
 #define STACK_SIZE (1024 * 1024)
 #define MAX_CONTAINERS 10
@@ -29,6 +30,7 @@
 #define RESPONSE_MSG_LEN 8192
 
 #define CONTROL_SOCKET_PATH "/tmp/engine_supervisor.sock"
+#define MONITOR_DEVICE_PATH "/dev/container_monitor"
 
 #define DEFAULT_SOFT_MIB 40
 #define DEFAULT_HARD_MIB 64
@@ -170,6 +172,46 @@ static void init_response(response_t *resp) {
     resp->ok = 0;
     resp->exit_code = -1;
     resp->message[0] = '\0';
+}
+
+static int register_container_with_kernel(pid_t pid, int soft_mib, int hard_mib) {
+    int fd = open(MONITOR_DEVICE_PATH, O_RDWR);
+    if (fd < 0) {
+        perror("open /dev/container_monitor failed");
+        return -1;
+    }
+
+    monitor_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.pid = pid;
+    req.soft_limit = soft_mib;
+    req.hard_limit = hard_mib;
+
+    if (ioctl(fd, REGISTER_CONTAINER, &req) != 0) {
+        perror("REGISTER_CONTAINER ioctl failed");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    return 0;
+}
+
+static int unregister_container_from_kernel(pid_t pid) {
+    int fd = open(MONITOR_DEVICE_PATH, O_RDWR);
+    if (fd < 0) {
+        perror("open /dev/container_monitor failed");
+        return -1;
+    }
+
+    if (ioctl(fd, UNREGISTER_CONTAINER, &pid) != 0) {
+        perror("UNREGISTER_CONTAINER ioctl failed");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    return 0;
 }
 
 static void set_response(response_t *resp, int ok, int exit_code, const char *fmt, ...) {
@@ -517,6 +559,12 @@ static int start_container_internal(const request_t *req, int *index_out, respon
 
     pthread_create(&containers[idx].producer_thread, NULL, log_producer_main, parg);
 
+    if (register_container_with_kernel(pid, req->soft_mib, req->hard_mib) != 0) {
+        fprintf(stderr,
+                "Warning: container %s started but kernel registration failed\n",
+                req->id);
+    }
+
     *index_out = idx;
     set_response(resp, 1, 0,
                  "Container %s started (PID %d)",
@@ -646,13 +694,19 @@ static void *reaper_main(void *arg) {
 
         for (int i = 0; i < MAX_CONTAINERS; i++) {
             if (!containers[i].used || containers[i].pid != pid) continue;
-
+                    
             if (WIFEXITED(status)) {
-                safe_strcpy(containers[i].state, "EXITED", sizeof(containers[i].state));
+                if (containers[i].stop_requested) {
+                    safe_strcpy(containers[i].state, "STOPPED", sizeof(containers[i].state));
+                } else {
+                    safe_strcpy(containers[i].state, "EXITED", sizeof(containers[i].state));
+                }
                 containers[i].exit_code = WEXITSTATUS(status);
             } else if (WIFSIGNALED(status)) {
                 if (containers[i].stop_requested) {
                     safe_strcpy(containers[i].state, "STOPPED", sizeof(containers[i].state));
+                } else if (WTERMSIG(status) == SIGKILL) {
+                    safe_strcpy(containers[i].state, "KILLED", sizeof(containers[i].state));
                 } else {
                     safe_strcpy(containers[i].state, "KILLED", sizeof(containers[i].state));
                 }
@@ -664,6 +718,12 @@ static void *reaper_main(void *arg) {
 
             pthread_cond_broadcast(&containers[i].state_cv);
 
+            if (unregister_container_from_kernel(pid) != 0) {
+                fprintf(stderr,
+                        "Warning: failed to unregister PID %d from kernel monitor\n",
+                        pid);
+            }
+
             if (containers[i].child_stack) {
                 free(containers[i].child_stack);
                 containers[i].child_stack = NULL;
@@ -671,7 +731,6 @@ static void *reaper_main(void *arg) {
 
             break;
         }
-
         pthread_mutex_unlock(&containers_mutex);
     }
 
