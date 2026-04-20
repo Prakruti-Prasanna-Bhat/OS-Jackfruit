@@ -78,28 +78,42 @@ sudo rmmod monitor
 ## 3. Demo with Screenshots
 
 ### 3.1 Multi-container Supervision
-Shows two containers running under a single supervisor process.
+In this experiment, two containers (`alpha` and `beta`) are launched using the `engine start` command while a single supervisor process is running in the background. Both containers execute concurrently, each with its own isolated root filesystem and process namespace. The supervisor remains active throughout the execution, managing lifecycle events and maintaining control over all running containers. This demonstrates that the runtime supports multi-container execution under a single controlling process.
+
+---
 
 ### 3.2 Metadata Tracking
-Displays container metadata using `engine ps`.
+The `engine ps` command is used to display detailed metadata about all tracked containers. The output includes container ID, host PID, current state (RUNNING/EXITED/KILLED), exit code, configured soft and hard memory limits, nice value, start time, and log file path. This confirms that the supervisor correctly maintains and updates container state information in real time, providing visibility into container lifecycle and resource configuration.
+
+---
 
 ### 3.3 Bounded-buffer Logging
-Shows logs captured through producer-consumer pipeline.
+A container running the `io_pulse` workload generates periodic output. This output is captured by the supervisor through pipes and passed into a bounded-buffer logging system implemented using producer–consumer threads. The `engine logs <id>` command retrieves the captured output, and the same data is verified directly from the corresponding log file (`logs/<id>.log`). The presence of consistent and complete log entries confirms that the logging pipeline works correctly without data loss, demonstrating proper synchronization and buffering.
+
+---
 
 ### 3.4 CLI and IPC
-Demonstrates CLI communicating with supervisor via UNIX socket.
+The CLI interface communicates with the supervisor using a UNIX domain socket located at `/tmp/engine_supervisor.sock`. Commands such as `start`, `ps`, and `stop` are issued from the CLI process and transmitted to the supervisor through this IPC channel. The supervisor processes these requests and returns responses, which are displayed in the terminal. The existence of the socket file and successful command execution demonstrate that inter-process communication between CLI and supervisor is functioning correctly.
+
+---
 
 ### 3.5 Soft-limit Warning
-Kernel logs showing memory soft limit exceeded.
+A container is launched with a very low soft memory limit and a high hard limit using the `memory_hog` workload. As the process exceeds the soft limit, the kernel memory monitor detects this condition and logs a warning message in `dmesg`. The container continues running despite exceeding the soft limit, confirming that the soft limit is advisory and non-enforcing. This demonstrates the monitoring capability of the kernel module without immediate termination.
+
+---
 
 ### 3.6 Hard-limit Enforcement
-Kernel kills container when hard limit is exceeded.
+Another container is launched with both low soft and hard memory limits. When the memory usage exceeds the hard limit, the kernel module triggers enforcement by sending a SIGKILL signal to the process. The `dmesg` output shows a "hard limit exceeded" message followed by a kill action. Subsequently, the `engine ps` command reflects the container state as `KILLED` with an appropriate exit code (137). This confirms correct enforcement of hard limits and accurate propagation of termination status to user space.
+
+---
 
 ### 3.7 Scheduling Experiment
-Comparison of containers with different nice values.
+Two CPU-bound containers running the `cpu_hog` workload are launched with different nice values (`-10` for high priority and `10` for low priority). Using the `ps` command, CPU utilization for both processes is monitored. The container with the lower nice value consistently receives a significantly higher share of CPU time compared to the one with a higher nice value. This demonstrates how Linux scheduling prioritizes processes based on nice values and validates the runtime's ability to expose scheduling behavior.
+
+---
 
 ### 3.8 Clean Teardown
-Shows no zombie processes after shutdown.
+After all experiments are complete, the containers are stopped and the supervisor process is terminated. System checks are performed to ensure proper cleanup. The command `ps` confirms that no zombie processes remain, indicating that all child processes have been correctly reaped. Additionally, the absence of the UNIX socket file (`/tmp/engine_supervisor.sock`) confirms that IPC resources have been released. This demonstrates that the system shuts down cleanly without leaving residual processes or resources.
 
 ---
 
