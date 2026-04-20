@@ -1,111 +1,180 @@
-# Multi-Container Runtime
+# Multi-Container Runtime with Kernel Memory Monitor
 
-A lightweight Linux container runtime in C with a long-running supervisor and a kernel-space memory monitor.
+## 1. Team Information
 
-Read [`project-guide.md`](project-guide.md) for the full project specification.
+- Name 1: **Prakruti Prasanna Bhat**
+- SRN 1: **PES1UG24CS330**
+
+- Name 2: **Prachi Ganesh Joshi**
+- SRN 2: **PES1UG24CS325**
 
 ---
 
-## Getting Started
+## 2. Build, Load, and Run Instructions
 
-### 1. Fork the Repository
+### Requirements
+- Ubuntu 22.04 / 24.04 VM
+- gcc, make
+- Linux headers installed
 
-1. Go to [github.com/shivangjhalani/OS-Jackfruit](https://github.com/shivangjhalani/OS-Jackfruit)
-2. Click **Fork** (top-right)
-3. Clone your fork:
+---
+
+### Step 1: Build the Project
 
 ```bash
-git clone https://github.com/<your-username>/OS-Jackfruit.git
-cd OS-Jackfruit
+make
 ```
 
-### 2. Set Up Your VM
-
-You need an **Ubuntu 22.04 or 24.04** VM with **Secure Boot OFF**. WSL will not work.
-
-Install dependencies:
+### Step 2: Load Kernel Module
 
 ```bash
-sudo apt update
-sudo apt install -y build-essential linux-headers-$(uname -r)
+sudo insmod monitor.ko
 ```
 
-### 3. Run the Environment Check
+Verify device:
 
 ```bash
-cd boilerplate
-chmod +x environment-check.sh
-sudo ./environment-check.sh
+ls -l /dev/container_monitor
 ```
 
-Fix any issues reported before moving on.
-
-### 4. Prepare the Root Filesystem
+### Step 3: Start Supervisor
 
 ```bash
-mkdir rootfs-base
-wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
-tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C rootfs-base
+sudo ./engine supervisor ./rootfs-base
+```
 
-# Make one writable copy per container you plan to run
+### Step 4: Create Container RootFS Copies
+
+```bash
 cp -a ./rootfs-base ./rootfs-alpha
 cp -a ./rootfs-base ./rootfs-beta
 ```
 
-Do not commit `rootfs-base/` or `rootfs-*` directories to your repository.
+### Step 5: Run Containers
 
-### 5. Understand the Boilerplate
-
-The `boilerplate/` folder contains starter files:
-
-| File                   | Purpose                                             |
-| ---------------------- | --------------------------------------------------- |
-| `engine.c`             | User-space runtime and supervisor skeleton          |
-| `monitor.c`            | Kernel module skeleton                              |
-| `monitor_ioctl.h`      | Shared ioctl command definitions                    |
-| `Makefile`             | Build targets for both user-space and kernel module |
-| `cpu_hog.c`            | CPU-bound test workload                             |
-| `io_pulse.c`           | I/O-bound test workload                             |
-| `memory_hog.c`         | Memory-consuming test workload                      |
-| `environment-check.sh` | VM environment preflight check                      |
-
-Use these as your starting point. You are free to restructure the repository however you want — the submission requirements are listed in the project guide.
-
-### 6. Build and Verify
+In another terminal:
 
 ```bash
-cd boilerplate
-make
+sudo ./engine start alpha ./rootfs-alpha "/io_pulse"
+sudo ./engine start beta ./rootfs-beta "/io_pulse"
 ```
 
-If this compiles without errors, your environment is ready.
-
-### 7. GitHub Actions Smoke Check
-
-Your fork will inherit a minimal GitHub Actions workflow from this repository.
-
-That workflow only performs CI-safe checks:
-
-- `make -C boilerplate ci`
-- user-space binary compilation (`engine`, `memory_hog`, `cpu_hog`, `io_pulse`)
-- `./boilerplate/engine` with no arguments must print usage and exit with a non-zero status
-
-The CI-safe build command is:
+### Step 6: CLI Commands
 
 ```bash
-make -C boilerplate ci
+sudo ./engine ps
+sudo ./engine logs alpha
+sudo ./engine stop alpha
 ```
 
-This smoke check does not test kernel-module loading, supervisor runtime behavior, or container execution.
+### Step 7: Unload Module
+
+```bash
+sudo rmmod monitor
+```
 
 ---
 
-## What to Do Next
+## 3. Demo with Screenshots
 
-Read [`project-guide.md`](project-guide.md) end to end. It contains:
+### 3.1 Multi-container Supervision
+Shows two containers running under a single supervisor process.
 
-- The six implementation tasks (multi-container runtime, CLI, logging, kernel monitor, scheduling experiments, cleanup)
-- The engineering analysis you must write
-- The exact submission requirements, including what your `README.md` must contain (screenshots, analysis, design decisions)
+### 3.2 Metadata Tracking
+Displays container metadata using `engine ps`.
 
-Your fork's `README.md` should be replaced with your own project documentation as described in the submission package section of the project guide. (As in get rid of all the above content and replace with your README.md)
+### 3.3 Bounded-buffer Logging
+Shows logs captured through producer-consumer pipeline.
+
+### 3.4 CLI and IPC
+Demonstrates CLI communicating with supervisor via UNIX socket.
+
+### 3.5 Soft-limit Warning
+Kernel logs showing memory soft limit exceeded.
+
+### 3.6 Hard-limit Enforcement
+Kernel kills container when hard limit is exceeded.
+
+### 3.7 Scheduling Experiment
+Comparison of containers with different nice values.
+
+### 3.8 Clean Teardown
+Shows no zombie processes after shutdown.
+
+---
+
+## 4. Engineering Analysis
+
+### 4.1 Isolation Mechanisms
+Containers are created using Linux namespaces (`CLONE_NEWPID`, `CLONE_NEWUTS`, `CLONE_NEWNS`) to isolate processes, hostname, and mount points. Each container uses `chroot()` to operate within its own filesystem.
+
+### 4.2 Supervisor and Process Lifecycle
+A long-running supervisor manages all containers. It tracks metadata, handles CLI commands, and reaps child processes using `waitpid()` to prevent zombies.
+
+### 4.3 IPC, Threads, and Synchronization
+Two IPC mechanisms are used:
+- UNIX domain sockets for CLI communication
+- Pipes for log transfer
+
+Logging uses a bounded buffer with producer-consumer threads synchronized via mutexes and condition variables.
+
+### 4.4 Memory Management and Enforcement
+The kernel module tracks container PIDs and periodically checks RSS usage.
+- **Soft limit:** generates warning
+- **Hard limit:** kills process using `SIGKILL`
+
+Kernel-space enforcement ensures reliable control over memory usage.
+
+### 4.5 Scheduling Behavior
+Containers are used to test Linux scheduling by varying nice values and workload types. CPU-bound and I/O-bound behaviors are observed to understand scheduler decisions.
+
+---
+
+## 5. Design Decisions and Tradeoffs
+
+| Component | Choice | Tradeoff | Justification |
+|---|---|---|---|
+| Namespace Isolation | Linux namespaces + chroot | Lightweight but shares host kernel | Efficient and sufficient for isolation requirements |
+| Supervisor Architecture | Single long-running supervisor | Central dependency point | Simplifies lifecycle and metadata management |
+| IPC and Logging | Separate IPC paths (socket + pipe) | Increased complexity | Avoids interference between control and log traffic |
+| Kernel Monitor | Kernel module for enforcement | Requires kernel-level debugging | Accurate and reliable memory control |
+| Scheduling Experiments | CPU-bound and I/O-bound workloads | Requires tuning workload duration | Clearly demonstrates scheduler behavior |
+
+---
+
+## 6. Scheduler Experiment Results
+
+### Experiment 1: CPU vs CPU (Different Nice Values)
+
+| Container | Nice | Observation |
+|---|---|---|
+| cpuA | 0 | Higher priority |
+| cpuB | 10 | Lower priority |
+
+On multi-core systems, both received similar CPU since they ran on separate cores.
+
+### Experiment 2: CPU vs I/O
+
+| Workload | Behavior |
+|---|---|
+| CPU-bound | Continuous CPU usage |
+| I/O-bound | Periodic bursts |
+
+The scheduler favors responsiveness of I/O-bound processes.
+
+### Conclusion
+Linux scheduler distributes tasks across cores efficiently. Nice values impact scheduling only under CPU contention, while workload type influences responsiveness.
+
+---
+
+## Final Notes
+
+All required tasks have been implemented:
+- Multi-container runtime
+- CLI + IPC
+- Logging system
+- Kernel memory monitor
+- Scheduling experiments
+- Clean teardown
+
+The project demonstrates key OS concepts including process management, synchronization, memory control, and scheduling.
